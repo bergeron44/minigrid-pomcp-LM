@@ -38,9 +38,16 @@ class ComplexDiscoveryEnv(MiniGridEnv):
     def _gen_grid(self, width, height):
         print(f"🔧 Generating {width}x{height} grid...")
         
-        # Create grid without outer walls for cleaner navigation
+        # Create grid and surround with outer walls to ensure valid forward checks
         self.grid = Grid(width, height)
-        print("✅ Grid created")
+        # Add perimeter walls (MiniGrid assumes outer boundary walls)
+        for x in range(width):
+            self.grid.set(x, 0, Wall())
+            self.grid.set(x, height - 1, Wall())
+        for y in range(height):
+            self.grid.set(0, y, Wall())
+            self.grid.set(width - 1, y, Wall())
+        print("✅ Grid created with outer walls")
         
         # Create a complete wall barrier at x=2 (ALL tiles in the door column)
         # This means walls at (2,0), (2,1), (2,3), (2,4) - leaving only (2,2) for the door
@@ -103,7 +110,10 @@ class ComplexDiscoveryEnv(MiniGridEnv):
         
         # Check what's in front of the agent
         front_pos = self.front_pos
-        front_cell = self.grid.get(*front_pos)
+        if 0 <= front_pos[0] < self.grid.width and 0 <= front_pos[1] < self.grid.height:
+            front_cell = self.grid.get(*front_pos)
+        else:
+            front_cell = None
         print(f"Cell in front: {front_pos} contains: {front_cell}")
         
         # Check what's at the agent's current position
@@ -549,8 +559,10 @@ class AutomatedAgent:
                 break
             
             # Clamp agent position to grid bounds if it somehow goes out
-            sim_env.agent_pos[0] = max(0, min(sim_env.agent_pos[0], sim_env.grid.width - 1))
-            sim_env.agent_pos[1] = max(0, min(sim_env.agent_pos[1], sim_env.grid.height - 1))
+            # Handle tuple/array immutability by reassigning a new list
+            clamped_x = max(0, min(int(sim_env.agent_pos[0]), sim_env.grid.width - 1))
+            clamped_y = max(0, min(int(sim_env.agent_pos[1]), sim_env.grid.height - 1))
+            sim_env.agent_pos = [clamped_x, clamped_y]
             
             # Choose next action using optimized distance policy
             next_action = self._choose_simple_action(sim_env)

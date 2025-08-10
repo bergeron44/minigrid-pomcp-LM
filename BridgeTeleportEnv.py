@@ -1,6 +1,12 @@
 import gymnasium as gym
 import numpy as np
+import os
 from typing import Optional, Tuple
+
+try:
+    from imageio import v2 as imageio  # for saving GIFs when recording
+except Exception:
+    imageio = None
 
 from minigrid.minigrid_env import MiniGridEnv
 from minigrid.core.grid import Grid
@@ -19,7 +25,7 @@ class Bridge(WorldObj):
         fill_coords(img, point_in_circle(0.5, 0.5, 0.31), (128, 0, 128))
 
 class ComplexDiscoveryEnv(MiniGridEnv):
-    def __init__(self, size=5, max_steps=None, **kwargs):
+    def __init__(self, size=5, max_steps=None, render_mode=None, **kwargs):
         self.mission_space = MissionSpace(
             mission_func=lambda: "find the key, open the door, and get to the goal. You may find strange shortcuts."
         )
@@ -29,7 +35,7 @@ class ComplexDiscoveryEnv(MiniGridEnv):
             mission_space=self.mission_space,
             grid_size=size,
             max_steps=max_steps,
-            render_mode="human",
+            render_mode=render_mode,
             **kwargs,
         )
         self.goal_pos: Optional[Tuple[int, int]] = None
@@ -199,6 +205,12 @@ class AutomatedAgent:
             'steps_taken': 0,
             'successful_paths': 0
         }
+        
+        # Recording configuration
+        self.record_video = False
+        self.record_output_dir = "runs"
+        self.record_fps = 5
+        self._record_frames = []
         
         # Separate game board for tracking actual moves
         self.actual_game_board = None
@@ -1141,6 +1153,16 @@ class AutomatedAgent:
         # Initialize the simulation board for this game
         self._initialize_simulation_board()
         
+        # Prepare recording if enabled and supported
+        self._record_frames = []
+        if self.record_video and getattr(self.env, "render_mode", None) == "rgb_array":
+            try:
+                frame0 = self.env.render()
+                if frame0 is not None:
+                    self._record_frames.append(frame0)
+            except Exception:
+                pass
+        
         while step_count < max_steps:
             # Record current position before action
             old_pos = self.env.unwrapped.agent_pos
@@ -1163,6 +1185,15 @@ class AutomatedAgent:
             print(f"Step {step_count}: Action {action}, Reward: {reward:.1f}, Total: {game_score:.1f}")
             print(f"   Moved from {old_pos} to {new_pos}")
             
+            # Capture frame if recording
+            if self.record_video and getattr(self.env, "render_mode", None) == "rgb_array":
+                try:
+                    frame = self.env.render()
+                    if frame is not None:
+                        self._record_frames.append(frame)
+                except Exception:
+                    pass
+            
             # Check if game is over
             if terminated or truncated:
                 break
@@ -1178,17 +1209,26 @@ class AutomatedAgent:
         # Display the simulation board and actual game board
         self._display_simulation_board()
         self._display_simulation_paths_summary()
-        self._display_actual_game_board()
-        self._display_actual_moves_summary()
-        self._display_simulation_vs_actual_comparison()
         
-        if terminated and self.env.unwrapped.goal_pos and self.env.unwrapped.agent_pos == self.env.unwrapped.goal_pos:
+        # Save recording if enabled
+        if self.record_video and getattr(self.env, "render_mode", None) == "rgb_array" and self._record_frames:
+            try:
+                os.makedirs(self.record_output_dir, exist_ok=True)
+                out_path = os.path.join(self.record_output_dir, f"game_{self.game_count}.gif")
+                if imageio is not None:
+                    imageio.mimsave(out_path, self._record_frames, fps=self.record_fps)
+                    print(f"💾 Saved recording to: {out_path}")
+                else:
+                    print("⚠️ imageio not available; cannot save recording")
+            except Exception as e:
+                print(f"⚠️ Failed to save recording: {e}")
+        
+        # Determine if the game was successful
+        success = self.env.unwrapped.goal_pos is not None and self.env.unwrapped.agent_pos == self.env.unwrapped.goal_pos
+        if success:
             self.performance_metrics['successful_paths'] += 1
-            print(f"🎯 Game {self.game_count} completed successfully! Final score: {game_score:.1f}")
-            return True
-        else:
-            print(f"❌ Game {self.game_count} failed. Final score: {game_score:.1f}")
-            return False
+        
+        return success
     
     def display_performance_metrics(self):
         """Display comprehensive performance metrics"""
@@ -1415,10 +1455,20 @@ def main():
     except gym.error.Error:
         pass
 
-    env = gym.make(env_id)
+    # Configuration via environment variables
+    render_mode = os.environ.get("RENDER_MODE", None)
+    record_flag = os.environ.get("RECORD", "0") == "1"
+    record_dir = os.environ.get("RECORD_DIR", "runs")
+    record_fps = int(os.environ.get("RECORD_FPS", "5"))
+    num_games_env = os.environ.get("GAMES")
+
+    env = gym.make(env_id, render_mode=render_mode)
     
     # Create automated agent
     agent = AutomatedAgent(env)
+    agent.record_video = record_flag
+    agent.record_output_dir = record_dir
+    agent.record_fps = record_fps
     
     print("🤖 AUTOMATED AGENT MODE")
     print("="*50)
@@ -1440,7 +1490,7 @@ def main():
     
     if choice == "1":
         # Play multiple games
-        num_games = 3
+        num_games = int(num_games_env) if num_games_env else 3
         successful_games = 0
         
         for i in range(num_games):
